@@ -60,7 +60,7 @@ def get_sim_score(word2embedding, word1, word2):
         e2 = word2embedding[word2]
         return np.sum(e1*e2) / (np.sqrt(np.sum(e1*e1)) * np.sqrt(np.sum(e2*e2)))
 
-def evaluate(embedding, sim_data, word2index, verbose=False):
+def similarity_score(sim_data, embedding, word2index, verbose=False):
     """
     Run word similarity test on the embedding using sim_data.
     

@@ -4,24 +4,26 @@ import time
 from collections import defaultdict
 
 import torch
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def get_word_id(word, word2id, lower):
+def get_word_id(word, word2index, lower):
     """
     Get a word ID.
     If the model does not use lowercase and the evaluation file is lowercased,
     we might be able to find an associated word.
     """
     assert type(lower) is bool
-    word_id = word2id.get(word)
+    word_id = word2index.get(word)
     if word_id is None and not lower:
-        word_id = word2id.get(word.capitalize())
+        word_id = word2index.get(word.capitalize())
     if word_id is None and not lower:
-        word_id = word2id.get(word.title())
+        word_id = word2index.get(word.title())
     return word_id
 
-def get_wordanalogy_scores(questionanswer_filepath, word2id, embeddings, lower, verbose = False):
+def evaluate(questionanswer_filepath, embeddings, word2index, lower=True, verbose=False):
     """
     Return (english) word analogy score
+    # False means we have embeddings for uppercased words, True means embeddings for lowercase
     """
     # normalize word embeddings
     row_sums = np.sqrt((embeddings ** 2).sum(1))[:, None]
@@ -34,6 +36,7 @@ def get_wordanalogy_scores(questionanswer_filepath, word2id, embeddings, lower, 
 
     # scores by category
     scores = defaultdict(dict)
+    results = defaultdict(dict)
 
     word_ids = {}
     queries = {}
@@ -61,10 +64,10 @@ def get_wordanalogy_scores(questionanswer_filepath, word2id, embeddings, lower, 
             assert len(line.split()) == 4, line
             word1, word2, word3, word4 = line.split()
 
-            word_id1 = get_word_id(word1, word2id, lower)
-            word_id2 = get_word_id(word2, word2id, lower)
-            word_id3 = get_word_id(word3, word2id, lower)
-            word_id4 = get_word_id(word4, word2id, lower)
+            word_id1 = get_word_id(word1, word2index, lower)
+            word_id2 = get_word_id(word2, word2index, lower)
+            word_id3 = get_word_id(word3, word2index, lower)
+            word_id4 = get_word_id(word4, word2index, lower)
 
             # if at least one word is not found
             if any(x is None for x in [word_id1, word_id2, word_id3, word_id4]):
@@ -90,68 +93,66 @@ def get_wordanalogy_scores(questionanswer_filepath, word2id, embeddings, lower, 
     
     overall_start_time = time.time()
     with torch.no_grad(): # make sure to not store computational graph info
-      for cat in queries:
+        for cat in queries:
 
-          start_time = time.time()
+            start_time = time.time()
 
-          qs_np = np.vstack(queries[cat])
-          qs_shape = qs_np.shape
-          
-          for i in range(0, qs_shape[0], ROW_LIMIT): #allocate matrices of size ROW LIMIT rows 
-            if i >= ROW_LIMIT:
-              total_cats += 1 
-            qs = torch.from_numpy(qs_np[i:i + ROW_LIMIT, :]).cuda()
-            keys = torch.from_numpy(embeddings.T).cuda()
-            values = qs.mm(keys)
-
-            # free up memory 
-            del qs
-            del keys 
-            torch.cuda.empty_cache()
-
-            word_ids_tensor = torch.tensor(word_ids[cat]).cuda()
-            curr_word_ids_tensor = word_ids_tensor[i:i+ROW_LIMIT, :]
-
-            # be sure we do not select input words
-            for j, ws in enumerate(curr_word_ids_tensor):
-                for wid in [ws[0], ws[1], ws[3]]:
-                    values[j, wid] = -1e9
-            maxes, indices = values.max(axis = 1)
-            correct_indices = curr_word_ids_tensor[:, 2]
-            num_correct = torch.sum(torch.eq(indices, correct_indices)).item()
-            key = cat + "_{}".format(str(round(i/(ROW_LIMIT))))
-            scores[key]['n_correct'] = num_correct
-
-            curr_cat +=1 
-            if verbose:
-                print('finished batch {} out of {}, took {} seconds'.format(curr_cat, total_cats, time.time() - start_time))
+            qs_np = np.vstack(queries[cat])
+            qs_shape = qs_np.shape
             
-            # clean up memory
-            del values 
-            del word_ids_tensor
-            del maxes
-            del indices
-            del correct_indices 
-            torch.cuda.empty_cache()
-            # print("Current CUDA snapshot after del and empty cache at end of loop", torch.cuda.memory_allocated())
+            for i in range(0, qs_shape[0], ROW_LIMIT): #allocate matrices of size ROW LIMIT rows 
+                if i >= ROW_LIMIT:
+                    total_cats += 1 
+                qs = torch.from_numpy(qs_np[i:i + ROW_LIMIT, :]).device()
+                keys = torch.from_numpy(embeddings.T).device()
+                values = qs.mm(keys)
+
+                # free up memory 
+                del qs
+                del keys 
+                torch.device.empty_cache()
+
+                word_ids_tensor = torch.tensor(word_ids[cat]).device()
+                curr_word_ids_tensor = word_ids_tensor[i:i+ROW_LIMIT, :]
+
+                # be sure we do not select input words
+                for j, ws in enumerate(curr_word_ids_tensor):
+                    for wid in [ws[0], ws[1], ws[3]]:
+                        values[j, wid] = -1e9
+                maxes, indices = values.max(axis = 1)
+                correct_indices = curr_word_ids_tensor[:, 2]
+                num_correct = torch.sum(torch.eq(indices, correct_indices)).item()
+                key = cat + "_{}".format(str(round(i/(ROW_LIMIT))))
+                scores[key]['n_correct'] = num_correct
+
+                curr_cat +=1 
+                if verbose:
+                    print('finished batch {} out of {}, took {} seconds'.format(curr_cat, total_cats, time.time() - start_time))
+                
+                # clean up memory
+                del values 
+                del word_ids_tensor
+                del maxes
+                del indices
+                del correct_indices 
+                torch.device.empty_cache()
     
-    overall_total_time = time.time() - overall_start_time
+    results['overall_total_time'] = time.time() - overall_start_time
     # compute and log accuracies
     
-    total_correct = 0
-    total_found = 0
+    results['total_correct'] = 0
+    results['total_found'] = 0
 
     for k in sorted(scores.keys()):
         v = scores[k]
-        total_correct += v['n_correct']
-        total_found += v.get('n_found', 0)
+        results['total_correct'] += v['n_correct']
+        results['total_found'] += v.get('n_found', 0)
     if verbose:
-        print("total correct: {}, total found: {}".format(total_correct, total_found))
-    total_accuracy = float(total_correct)/total_found
+        print("total correct: {}, total found: {}".format(results['total_correct'], results['total_found']))
+    results['total_accuracy'] = float(results['total_correct'])/results['total_found']
     if verbose:
-        print("total acc: {}".format(total_accuracy))
-    return scores, total_correct, total_found, total_accuracy, overall_total_time
+        print("total acc: {}".format(results['total_accuracy']))
 
-def evaluate(embedding, questionanswer_filepath, word2index):    
-    scores, total_correct, total_found, total_accuracy, total_time = get_wordanalogy_scores(questionanswer_filepath, word2index, embedding, True, verbose = False) # False means we have embeddings for uppercased words, True means embeddings for lowercase
-    return total_accuracy
+    results['scores'] = scores
+
+    return results

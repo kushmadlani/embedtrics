@@ -124,7 +124,7 @@ def dist_ratio(embedding, top_list, k, N, acc_filepath=None, verbose=True):
 
     return results
 
-def evaluate(embedding, k, N, acc_filepath=None, verbose=False):
+def intrusion_score(embedding, k, N, acc_filepath=None, verbose=False):
     """
     Runs word intrusion experiment.
     Parameters:
