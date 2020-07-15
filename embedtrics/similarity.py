@@ -60,16 +60,16 @@ def get_sim_score(word2embedding, word1, word2):
         e2 = word2embedding[word2]
         return np.sum(e1*e2) / (np.sqrt(np.sum(e1*e1)) * np.sqrt(np.sum(e2*e2)))
 
-def similarity_score(sim_data, embedding, word2index, verbose=False):
+def similarity_score(sim_data_path, embedding, word2index, verbose=False):
     """
     Run word similarity test on the embedding using sim_data.
     
     Parameters:
     -----------
+    sim_data_path : `str`
+        Filepath of the dataset.
     embedding : `numpy.ndarray`
         The embedding matrix.
-    sim_data : `dict`
-        The dataset with the word pairs and corresponding similarity scores.
     word2index : `dict`
         Dictionary mapping word to index.       
     verbose : `Boolean`
@@ -82,7 +82,10 @@ def similarity_score(sim_data, embedding, word2index, verbose=False):
     pvalue : `float`
         The two-sided p-value for a hypothesis test whose null hypothesis 
         is that two sets of data are uncorrelated.
-    """        
+    """
+    # load sim data 
+    sim_data = load_sim_data(sim_data_path, 'SimLex999')
+
     word2embedding = {word:embedding[index] for word, index in word2index.items()}
     pred_scores = list()
 
