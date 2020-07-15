@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import io
 import time
 from collections import defaultdict
@@ -20,11 +21,15 @@ def get_word_id(word, word2index, lower):
         word_id = word2index.get(word.title())
     return word_id
 
-def evaluate(questionanswer_filepath, embeddings, word2index, lower=True, verbose=False):
+def analogies_score(qa_filepath, embeddings, word2index, lower=True, verbose=False):
     """
     Return (english) word analogy score
-    # False means we have embeddings for uppercased words, True means embeddings for lowercase
     """
+    # if not os.path.isdir(qa_filepath):
+    #     raise ValueError("Could not find question-words.txt")
+    
+    results = defaultdict(list)
+
     # normalize word embeddings
     row_sums = np.sqrt((embeddings ** 2).sum(1))[:, None]
     rows_with_zerosum = np.argwhere(row_sums == 0)
@@ -36,14 +41,13 @@ def evaluate(questionanswer_filepath, embeddings, word2index, lower=True, verbos
 
     # scores by category
     scores = defaultdict(dict)
-    results = defaultdict(dict)
 
     word_ids = {}
     queries = {}
 
     num_examples_thrown = 0
     total_examples = 0
-    with io.open(questionanswer_filepath, 'r', encoding='utf-8') as f:
+    with io.open(qa_filepath, 'r', encoding='utf-8') as f:
         for line in f:
             # new line
             line = line.rstrip()
@@ -93,49 +97,51 @@ def evaluate(questionanswer_filepath, embeddings, word2index, lower=True, verbos
     
     overall_start_time = time.time()
     with torch.no_grad(): # make sure to not store computational graph info
-        for cat in queries:
+      for cat in queries:
 
-            start_time = time.time()
+          start_time = time.time()
 
-            qs_np = np.vstack(queries[cat])
-            qs_shape = qs_np.shape
+          qs_np = np.vstack(queries[cat])
+          qs_shape = qs_np.shape
+          
+          for i in range(0, qs_shape[0], ROW_LIMIT): #allocate matrices of size ROW LIMIT rows 
+            if i >= ROW_LIMIT:
+              total_cats += 1 
+            qs = torch.from_numpy(qs_np[i:i + ROW_LIMIT, :]).to(device)
+            keys = torch.from_numpy(embeddings.T).to(device)
+            values = qs.mm(keys)
+
+            # free up memory 
+            del qs
+            del keys 
+            if device=="cuda":
+                torch.cuda.empty_cache()
+
+            word_ids_tensor = torch.tensor(word_ids[cat]).to(device)
+            curr_word_ids_tensor = word_ids_tensor[i:i+ROW_LIMIT, :]
+
+            # be sure we do not select input words
+            for j, ws in enumerate(curr_word_ids_tensor):
+                for wid in [ws[0], ws[1], ws[3]]:
+                    values[j, wid] = -1e9
+            maxes, indices = values.max(axis = 1)
+            correct_indices = curr_word_ids_tensor[:, 2]
+            num_correct = torch.sum(torch.eq(indices, correct_indices)).item()
+            key = cat + "_{}".format(str(round(i/(ROW_LIMIT))))
+            scores[key]['n_correct'] = num_correct
+
+            curr_cat +=1 
+            if verbose:
+                print('finished batch {} out of {}, took {} seconds'.format(curr_cat, total_cats, time.time() - start_time))
             
-            for i in range(0, qs_shape[0], ROW_LIMIT): #allocate matrices of size ROW LIMIT rows 
-                if i >= ROW_LIMIT:
-                    total_cats += 1 
-                qs = torch.from_numpy(qs_np[i:i + ROW_LIMIT, :]).device()
-                keys = torch.from_numpy(embeddings.T).device()
-                values = qs.mm(keys)
-
-                # free up memory 
-                del qs
-                del keys 
-                torch.device.empty_cache()
-
-                word_ids_tensor = torch.tensor(word_ids[cat]).device()
-                curr_word_ids_tensor = word_ids_tensor[i:i+ROW_LIMIT, :]
-
-                # be sure we do not select input words
-                for j, ws in enumerate(curr_word_ids_tensor):
-                    for wid in [ws[0], ws[1], ws[3]]:
-                        values[j, wid] = -1e9
-                maxes, indices = values.max(axis = 1)
-                correct_indices = curr_word_ids_tensor[:, 2]
-                num_correct = torch.sum(torch.eq(indices, correct_indices)).item()
-                key = cat + "_{}".format(str(round(i/(ROW_LIMIT))))
-                scores[key]['n_correct'] = num_correct
-
-                curr_cat +=1 
-                if verbose:
-                    print('finished batch {} out of {}, took {} seconds'.format(curr_cat, total_cats, time.time() - start_time))
-                
-                # clean up memory
-                del values 
-                del word_ids_tensor
-                del maxes
-                del indices
-                del correct_indices 
-                torch.device.empty_cache()
+            # clean up memory
+            del values 
+            del word_ids_tensor
+            del maxes
+            del indices
+            del correct_indices 
+            if device=="cuda":
+                torch.cuda.empty_cache()
     
     results['overall_total_time'] = time.time() - overall_start_time
     # compute and log accuracies
