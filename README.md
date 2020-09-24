@@ -3,5 +3,5 @@ Word embedding evaluation package for word similarity, word analogies &amp; word
 
 See accompying blog post [here](https://kushmadlani.github.io/embedding-eval/) for background.
 
-Authors:
+### Authors
 Kush Madlani, William Lamb, Udeepa Meepegama, Aneesh Pappu
